@@ -17,6 +17,7 @@ inline float Deg2Rad(float deg) { return deg * (PI_F / 180.0f); }
 #ifndef MATERIAL_MAP_DIFFUSE
 #define MATERIAL_MAP_DIFFUSE 0
 #endif
+
 static Model  s_CubeModel = { 0 };
 static bool   s_CubeModelInit = false;
 void DrawCubeTexture(Texture2D texture, Vector3 position,
@@ -257,7 +258,7 @@ int main() {
         // ② 충돌 데미지 타이머 감소
         if (contactTimer > 0.0f) {
             contactTimer -= dt;
-            if (contactTimer < 0.0f) contactTimer = 0.0f;
+        if (contactTimer < 0.0f) contactTimer = 0.0f;
         }
 
         // ── 플레이어 입력 & 이동 ───────────────────────────────
