@@ -64,7 +64,7 @@ struct Bullet {
     bool active;
     std::vector<Vector3> trail;
 };
-struct Enemy { Vector3 pos; int health; bool alive; int type; };
+struct Enemy { Vector3 pos; int health; bool alive; int type; float fireCooldown; };
 struct Item { Vector3 pos; bool picked; };
 struct Player { Vector3 pos; float yaw; int health, score; };
 struct Impact {
@@ -77,6 +77,8 @@ struct BloodParticle {
     float life; // 0.0~1.0
 };
 
+static float damageEffect = 0.0f;  // 0.0~1.0
+static std::vector<Bullet> enemyBullets;
 std::vector<BloodParticle> bloods;
 
 // 맵 생성
@@ -158,9 +160,24 @@ void DrawMiniMap(const Player& player,
     DrawRectangle(m + int(player.pos.x * s) + 1, n + int(player.pos.z * s) + 1, s - 2, s - 2, LIME);
 }
 
+//보스가 플레이어를 볼 수 있는지 검사
+
+bool HasLOS(Vector3 a, Vector3 b) {
+    Vector3 dir = Vector3Normalize(Vector3Subtract(b, a));
+    float dist = Vector3Distance(a, b);
+    for (float d = 0.5f; d < dist; d += 0.2f) {
+        Vector3 p = Vector3Add(a, Vector3Scale(dir, d));
+        int mx = (int)p.x, mz = (int)p.z;
+        if (mx < 0 || mx >= MAP_SIZE || mz < 0 || mz >= MAP_SIZE) return false;
+        if (mapData[mz][mx] == 1) return false;
+    }
+    return true;
+}
+
 Texture2D bossTex;
 Texture2D itemTex;
 Texture2D enemyTex;
+Texture2D exitTex;
 
 int main() {
     srand((unsigned)time(NULL));
@@ -170,6 +187,7 @@ int main() {
     bossTex = LoadTexture("boss.png");
     itemTex = LoadTexture("aid.png");
     enemyTex = LoadTexture("enemy.png");
+    exitTex = LoadTexture("exit.png");
 
     do {
         GenerateMap();
@@ -228,26 +246,57 @@ int main() {
     bool gameOver = false, gameClear = false;
     double startTime = GetTime();
     double clearTime = 0.0; // 클리어 타임 저장 변수
+    float contactTimer = 0.0f;
 
     while (!WindowShouldClose()) {
-        // 입력 & 이동
+        // ① 프레임당 경과 시간 계산 (딱 한 번만)
+        float dt = GetFrameTime();
+        damageEffect -= dt * 2.0f;
+        if (damageEffect < 0.0f) damageEffect = 0.0f;
+
+        // ② 충돌 데미지 타이머 감소
+        if (contactTimer > 0.0f) {
+            contactTimer -= dt;
+            if (contactTimer < 0.0f) contactTimer = 0.0f;
+        }
+
+        // ── 플레이어 입력 & 이동 ───────────────────────────────
         if (!gameOver && !gameClear) {
             Vector2 md = GetMouseDelta();
             player.yaw -= md.x * 0.2f;
-            Vector3 fw = Vector3{ sinf(Deg2Rad(player.yaw)),0,cosf(Deg2Rad(player.yaw)) };
-            Vector3 rt = Vector3{ fw.z,0,-fw.x }, mv = Vector3{ 0,0,0 };
+
+            Vector3 fw = { sinf(Deg2Rad(player.yaw)), 0, cosf(Deg2Rad(player.yaw)) };
+            Vector3 rt = { fw.z, 0, -fw.x }, mv = { 0,0,0 };
+
             if (IsKeyDown(KEY_W)) mv = Vector3Add(mv, fw);
             if (IsKeyDown(KEY_S)) mv = Vector3Subtract(mv, fw);
             if (IsKeyDown(KEY_A)) mv = Vector3Add(mv, rt);
             if (IsKeyDown(KEY_D)) mv = Vector3Subtract(mv, rt);
+
             Vector3 np = Vector3Add(player.pos, Vector3Scale(mv, PLAYER_SPEED));
             int nx = (int)np.x, nz = (int)np.z;
             if (mapData[nz][nx] != 1) player.pos = np;
+
             camera.position = player.pos;
             camera.target = Vector3Add(player.pos, fw);
+
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
-                bullets.push_back({ player.pos,fw,true });
+                bullets.push_back({ player.pos, fw, true });
         }
+
+        for (auto& e : enemies) {
+            if (!e.alive || e.type != 1) continue;  // 보스만
+            if (HasLOS(e.pos, player.pos)) {
+                e.fireCooldown -= dt;
+                if (e.fireCooldown <= 0.0f) {
+                    Vector3 dir = Vector3Normalize(Vector3Subtract(player.pos, e.pos));
+                    enemyBullets.push_back({ e.pos, dir, true });
+                    // 쿨다운 재설정(2~4초)
+                    e.fireCooldown = 1.0f + (rand() % 100) / 100.0f * 2.0f;
+                }
+            }
+        }
+
         // 총알
         for (auto& b : bullets) {
             if (!b.active) continue;
@@ -262,6 +311,42 @@ int main() {
             }
         }
 
+        // 적 총알
+        for (auto& b : enemyBullets) {
+            if (!b.active) continue;
+            b.trail.push_back(b.pos);
+            if (b.trail.size() > 10) b.trail.erase(b.trail.begin());
+
+            // ── Movement ──────────────────────────
+            b.pos = Vector3Add(b.pos, Vector3Scale(b.dir, BULLET_SPEED * 0.8f));
+            int bx = (int)b.pos.x, bz = (int)b.pos.z;
+            if (bx < 0 || bx >= MAP_SIZE || bz < 0 || bz >= MAP_SIZE || mapData[bz][bx] == 1) {
+                b.active = false;
+                impacts.push_back({ b.pos, GetTime() });
+                continue;
+            }
+
+            // ── Player hit ─────────────────────────
+            if (Vector3Distance(b.pos, player.pos) < 0.6f) {
+                b.active = false;
+                player.health -= 15;
+                impacts.push_back({ b.pos, GetTime() });
+                if (player.health <= 0) gameOver = true;
+                damageEffect = 1.0f;
+            }
+
+            for (int i = 0; i < 12; ++i) {
+                float angle = ((float)i / 12.0f) * 2 * PI_F + GetRandomValue(-10, 10) * 0.1f;
+                float speed = 0.1f + GetRandomValue(0, 10) * 0.01f;
+                Vector3 dir = Vector3Normalize(Vector3{
+                    cosf(angle),
+                    GetRandomValue(0,10) * 0.02f,
+                    sinf(angle)
+                    });
+                bloods.push_back({ b.pos, Vector3Scale(dir, speed), 1.0f });
+            }
+        }
+
         // 적
         for (auto& e : enemies) if (e.alive) {
             Vector3 tp = Vector3Subtract(player.pos, e.pos);
@@ -272,8 +357,17 @@ int main() {
                 int ex = (int)np2.x, ez = (int)np2.z;
                 if (mapData[ez][ex] != 1) e.pos = np2;
             }
-            if (d < 0.7f && --player.health <= 0) gameOver = true;
+            float dist = Vector3Distance(player.pos, e.pos);
+            if (dist < 0.7f) {
+                if (contactTimer <= 0.0f) {
+                    player.health -= 10;       // 10HP 데미지
+                    contactTimer = 0.5f;       // 0.5초 재발사 대기
+                    if (player.health <= 0) gameOver = true;
+                    damageEffect = 1.0f;
+                }
+            }
         }
+
 
         // 충돌
         for (auto& b : bullets) if (b.active)
@@ -281,13 +375,20 @@ int main() {
                 e.health -= 15; b.active = false;
                 if (e.health <= 0) { e.alive = false; player.score += 100; }
                 for (int i = 0; i < 12; ++i) {
-                    float angle = ((float)i / 12.0f) * 2.0f * PI_F + GetRandomValue(-10, 10) * 0.1f;
-                    float speed = 0.1f + GetRandomValue(0, 10) * 0.01f;
-                    Vector3 dir = Vector3Normalize(Vector3{ cosf(angle), GetRandomValue(0,10) * 0.02f, sinf(angle) });
+                    float angle = ((float)i / 12.0f) * 2 * PI_F + GetRandomValue(-10, 10) * 0.1f;
+                    // y축 분산: -0.2 ~ +0.2
+                    float pitch = ((GetRandomValue(0, 100) / 100.0f) - 0.5f) * 0.4f;
+                    Vector3 dir = Vector3Normalize(Vector3{
+                         cosf(angle),
+                         pitch,
+                         sinf(angle)
+                    });
+                    // 속도: 0.05 ~ 0.1
+                    float speed = 0.05f + GetRandomValue(0, 10) * 0.005f;
                     bloods.push_back({ b.pos, Vector3Scale(dir, speed), 1.0f });
                 }
-                impacts.push_back({ b.pos, GetTime() }); // ← 임팩트 저장
             }
+
 
         //피 효과
         for (auto& b : bloods) {
@@ -345,6 +446,18 @@ int main() {
                 DrawSphere(b.pos, 0.08f, Fade(YELLOW, 0.3f)); // Glow
             }
         }
+
+        //적 총알 렌더링
+        for (auto& b : enemyBullets) {
+            if (!b.active) continue;
+            for (size_t i = 1; i < b.trail.size(); ++i) {
+                DrawLine3D(b.trail[i - 1], b.trail[i],
+                    Fade(RED, 0.4f + 0.6f * (float)i / b.trail.size()));
+            }
+            DrawSphere(b.pos, 0.05f, RED);
+            DrawSphere(b.pos, 0.10f, Fade(RED, 0.3f));
+        }
+
         double now = GetTime();
         for (auto it = impacts.begin(); it != impacts.end(); ) {
             if (now - it->time > 0.2) it = impacts.erase(it); // 0.2초 후 삭제
@@ -356,9 +469,14 @@ int main() {
 
         //피 렌더링
         for (auto& b : bloods)
-            DrawSphere(b.pos, 0.03f * b.life, Fade(RED, b.life));
+            DrawSphere(b.pos, 0.02f * b.life, Fade(RED, b.life));
 
-        DrawCube(exitPos, 0.6f, 0.1f, 0.6f, GOLD);
+        {
+            float exitSize = 1.4f;     // 원하는 크기
+            Vector3 ePos = exitPos;
+            ePos.y = exitSize * 0.5f;
+            DrawBillboard(camera, exitTex, ePos, exitSize, WHITE);
+        }
         EndMode3D();
 
         // HUD
@@ -378,16 +496,30 @@ int main() {
             DrawText("STAGE CLEAR!", 330, 330, 50, GOLD);
             DrawText(TextFormat("Time: %.1fs", clearTime), 380, 400, 25, WHITE); // 고정된 시간만 사용
         }
+
+        if (damageEffect > 0.0f) {
+            // 상단 모서리부터 투명→빨강 그라데이션
+            Color c1 = Fade(RED, damageEffect * 0.6f);
+            Color c2 = Fade(RED, damageEffect * 0.0f);
+            Rectangle full = { 0, 0, (float)GetScreenWidth(), (float)GetScreenHeight() };
+            DrawRectangleGradientEx(full,
+                c1,  // top-left
+                c1,  // top-right
+                c2,  // bottom-left
+                c2   // bottom-right
+            );
+        }
         EndDrawing();
     }
 
-    UnloadTexture(wallTex);
     UnloadCubeTextureModel();
     CloseWindow();
 
+    UnloadTexture(wallTex);
     UnloadTexture(bossTex);
     UnloadTexture(itemTex);
     UnloadTexture(enemyTex);
+    UnloadTexture(exitTex);
 
     return 0;
 }
