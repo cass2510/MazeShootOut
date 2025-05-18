@@ -1,115 +1,110 @@
-🔫 FPS Maze Escape - raylib + C++
-C++과 raylib으로 만든 3D FPS 스타일 미로 탈출 게임
-절차적 맵 생성, 총격전, 보스 AI, 시각 이펙트까지 직접 설계한 프로젝트
+# 🔫 FPS Maze Escape
 
-프로젝트 소개
-Maze Escape는 C++과 raylib을 활용한 3D FPS 게임으로,
-절차적으로 생성되는 미로에서 적과 보스를 물리치고 탈출구를 찾아 클리어하는 것을 목표로 합니다.
+**C++ & raylib** 기반 3D FPS 스타일 미로 탈출 게임
 
-본 게임은 단순한 시각화 예제를 넘어, 다음과 같은 구조적 요소를 포함합니다:
+절차적 맵 생성, 총격전, 보스 AI, 시각 이펙트까지 직접 설계한 프로젝트입니다.
 
-절차적 맵 생성 + 경로 유효성 검사
+---
 
-2종의 AI 적 (일반, 보스)과 전투 시스템
+## 프로젝트 소개
 
-실시간 총알 충돌 판정과 궤적 이펙트
+**Maze Escape**는 C++과 raylib를 활용하여 구현한 3D FPS 게임으로, 절차적으로 생성되는 미로에서 적과 보스를 물리치고 탈출구를 찾아 클리어하는 것을 목표로 합니다.
 
-피격 연출, 임팩트, 혈흔 등 다양한 시각 효과
+### 주요 특징
 
-미니맵 HUD, 체력·점수 시스템, 클리어 타이머
+* **절차적 맵 생성 → 경로 유효성 검사**
 
-주요 개발 요소
-🧱 절차적 미로 생성 + 경로 보장
-20×20 맵을 랜덤으로 생성 후, BFS 기반으로 시작~출구 간 경로 유효성 검사
+  * 20×20 격자 미로를 랜덤으로 생성 후 BFS 기반 경로 검사(`HasPath`)로 출발\~출구 연결 보장
+  * 유효 경로가 없으면 자동 재생성
+* **2종의 AI 적 (일반 & 보스) + 전투 시스템**
 
-경로가 없는 맵은 자동으로 재생성
+  * 일반: 플레이어에게 직진, 접촉 시 데미지
+  * 보스: `HasLOS()`로 시야 판정, 일정 쿨다운마다 탄환 발사
+* **실시간 총알 충돌 판정 & 궤적 이펙트**
 
-벽 비율, 가장자리 감싸기 등 게임성 고려
+  * `Bullet` 구조체에 위치·방향·trail 저장 → `DrawLine3D`로 연속 궤적 렌더링
+  * 벽·적 충돌 시 임팩트(`Impact`) 생성 및 파티클 전개
+* **피격 연출 & 혈흔 파티클**
 
-cpp
-복사
-편집
-do {
-    GenerateMap();
-} while (!HasPath(1, 1, MAP_SIZE - 2, MAP_SIZE - 2));
-🔫 총격 시스템: 탄환, 충돌, 궤적
-탄환은 Bullet 구조체로 관리, 이동마다 trail 저장 → 선형 궤적 시각화
+  * `damageEffect`로 화면 붉은 오버레이
+  * `BloodParticle`로 y축 분산 혈흔 파티클 12개 생성 → 속도·감쇠 처리
+* **미니맵 HUD & 상태 표시**
 
-벽이나 적과 충돌 시 impact 이펙트 생성
+  * `DrawMiniMap`으로 우측 상단 실시간 미니맵 렌더링
+  * 체력, 점수, 남은 적 수, 클리어 타이머 등 HUD 출력
+* **게임 클리어 / 오버 조건**
 
-피격 시 적에게 혈흔 파티클 12개 분산 발생 (방향·속도 랜덤)
+  * 체력 ≤ 0 → GAME OVER
+  * 출구 도달 → STAGE CLEAR & 클리어 시간 표시
 
-cpp
-복사
-편집
+---
+
+## 주요 구조체 및 코드 예시
+
+### 1. `GenerateMap()` + `HasPath()`
+
+```cpp
+// 절차적 맵 생성 & 경로 보장
+do { GenerateMap(); }
+while (!HasPath(1,1,MAP_SIZE-2,MAP_SIZE-2));
+```
+
+* `GenerateMap()`: 가장자리 벽 생성 + 내부 30% 확률 벽 배치
+* `HasPath()`: BFS로 (1,1) → (MAP\_SIZE-2,MAP\_SIZE-2) 경로 확인
+
+### 2. `Bullet` & 궤적 이펙트
+
+```cpp
+struct Bullet {
+    Vector3 pos, dir;      // 위치·방향
+    bool active;           // 활성화 여부
+    std::vector<Vector3> trail; // 궤적 좌표 저장
+};
+
+// 매 프레임 이동 → trail.push_back → 궤적 렌더링
 b.trail.push_back(b.pos);
 b.pos = Vector3Add(b.pos, Vector3Scale(b.dir, BULLET_SPEED));
-🧠 AI 적 & 보스
-일반 적은 플레이어에게 직진하며 접촉시 데미지
+```
 
-보스는 HasLOS()로 직선 시야 판정 후, 일정 시간마다 탄환 발사
+### 3. 보스 AI
 
-보스는 체력이 높고 속도는 느리며, 별도 쿨다운 적용
-
-cpp
-복사
-편집
+```cpp
 if (HasLOS(e.pos, player.pos)) {
     if (e.fireCooldown <= 0.0f) {
         enemyBullets.push_back({ e.pos, dir, true });
-        e.fireCooldown = 1.0f + (rand() % 100) / 100.0f * 2.0f;
+        e.fireCooldown = 1.0f + (rand()%100)/100.0f * 2.0f;
     }
 }
-💥 시각 효과: 파티클, 혈흔, 데미지 오버레이
-총알 피격 시 붉은 화면 오버레이 (damageEffect)
+```
 
-파티클은 BloodParticle 구조체로 이동·감쇠
+* `HasLOS()`: 광선 추적으로 벽 방해 여부 확인
+* 쿨다운 범위: 1\~3초 랜덤 재설정
 
-적 사망 시 혈흔 파편이 원형으로 분산되어 시각적 타격감 강화
+### 4. 파티클 & 혈흔
 
-cpp
-복사
-편집
+```cpp
 for (auto& b : bloods) {
     b.pos = Vector3Add(b.pos, b.vel);
     b.vel = Vector3Scale(b.vel, 0.92f);
     b.life -= 0.03f;
 }
-🗺 미니맵 + HUD
-우측 상단에 실시간 미니맵 표시 (DrawMiniMap)
+```
 
-플레이어, 적(보스/일반), 아이템, 출구까지 색상별 표시
+* `BloodParticle`: 위치·속도·수명 관리
+* 수명 0 되면 제거 (`std::remove_if`)
 
-체력, 점수, 남은 적 수 등 게임 진행 정보를 직관적으로 HUD에 출력
+---
 
-🏁 게임 클리어 / 종료 조건
-플레이어 체력 ≤ 0 → GAME OVER
+## 게임 실행 방법
 
-출구 근처 도달 시 → STAGE CLEAR와 클리어 시간 출력
+1. **MazeShootOut.zip** 압축 해제
+2. 실행 파일(`MazeShootOut.exe`)과 함께 `raylib.dll`, 텍스처 파일(`brick.png`, `boss.png`, `enemy.png`, `aid.png`, `exit.png`)을 동일 폴더에 위치
+3. **Windows**: 실행 파일 더블 클릭
+4. **Linux/Mac**: 터미널에서 `./MazeShootOut`
 
-탈출 조건: 보스와 적을 무시하고 빠르게 클리어할 수도 있음
+### 조작 키
 
-cpp
-복사
-편집
-if (!gameOver && !gameClear && Vector3Distance(exitPos, player.pos) < 0.8f) {
-    gameClear = true;
-    clearTime = GetTime() - startTime;
-}
-설계 포인트 요약
-요소	설명
-그래픽 표현	DrawModelEx, DrawBillboard, DrawSphere 등 raylib의 3D 렌더링 API를 적극 활용
-구조화	Player, Enemy, Bullet, Item, Impact, BloodParticle 등 명확한 구조체 기반 설계
-이벤트 처리	탄환 이동/충돌, 보스 AI 동작, 파티클 수명 관리 등은 Update 루프 내에서 프레임 단위로 처리
-최적화	trail 및 파티클 등 불필요한 오브젝트는 std::remove_if로 정리하여 성능 관리
-
-🕹 실행 방법
-이 저장소를 다운로드하거나, 제공된 MazeShootOut.zip 파일의 압축을 해제합니다.
-
-폴더 내의 MazeShootOut.exe 파일을 더블 클릭하면 게임이 실행됩니다.
-
-WASD 키로 이동하고, 마우스로 조준하며, 왼쪽 클릭으로 공격하세요.
-
-게임은 ESC 키로 종료할 수 있습니다.
-
-✅ raylib.dll 및 필요한 이미지 리소스들이 모두 포함되어 있어, 별도의 설치나 설정 없이 실행됩니다.
+* 이동: `W/A/S/D`
+* 시점 회전: 마우스 이동
+* 발사: 마우스 왼쪽 버튼
+* 종료: `ESC`
